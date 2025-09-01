@@ -1,0 +1,137 @@
+#--NameSpace--#
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: omniops-demo
+---
+#--Deployment--#
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flask-app
+  namespace: omniops-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flask-app
+  template:
+    metadata:
+      labels:
+        app: flask-app
+    spec:
+      containers:
+        - name: flask
+          image: 0xnef/flask-kong-app:latest               #<-- feel free to use any image you want.
+          ports:
+            - containerPort: 5000
+---
+#--Service--#
+apiVersion: v1
+kind: Service
+metadata:
+  name: flask-service
+  namespace: omniops-demo
+spec:
+  type: ClusterIP
+  selector:
+    app: flask-app
+  ports:
+    - port: 5000
+      targetPort: 5000
+---
+#--Secret--#
+apiVersion: v1
+kind: Secret
+metadata:
+  name: omniops-apikey
+  namespace: omniops-demo
+  labels:
+    konghq.com/credential: key-auth
+type: Opaque
+stringData:
+  key: omniops
+---
+#--KongConsumer--#
+apiVersion: configuration.konghq.com/v1
+kind: KongConsumer
+metadata:
+  name: omniops-consumer
+  namespace: omniops-demo
+  annotations:
+    kubernetes.io/ingress.class: kong
+username: omniops
+credentials:
+- omniops-apikey
+---
+#--KongPlugin--#
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: require-username-auth
+  namespace: omniops-demo
+plugin: key-auth
+config:
+  hide_credentials: true
+  key_names: ["username"]
+  key_in_header: true
+  key_in_query: false
+  key_in_body: false
+---
+#--Issuer--#
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: letsencrypt-issuer
+  namespace: omniops-demo
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: your-email@example.com                             #<-- replace with your real email
+    privateKeySecretRef:
+      name: letsencrypt-account-key
+    solvers:
+    - http01:
+        ingress:
+          class: kong
+---
+#--Certificate--#
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: justctf-xyz-cert
+  namespace: omniops-demo
+spec:
+  secretName: justctf-xyz-tls  
+  issuerRef:
+    name: letsencrypt-issuer     
+    kind: Issuer
+  dnsNames:
+  - justctf.xyz                  
+---
+#--Ingress--#
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: flask-ingress
+  namespace: omniops-demo
+  annotations:
+    konghq.com/plugins: require-username-auth
+    cert-manager.io/issuer: letsencrypt-issuer
+spec:
+  ingressClassName: kong
+  tls:
+  - hosts:
+    - justctf.xyz
+    secretName: justctf-xyz-tls  
+  rules:
+  - host: justctf.xyz                     #<-- your domain
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: flask-service
+            port:
+              number: 5000
